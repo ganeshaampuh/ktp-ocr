@@ -6,111 +6,110 @@ const upload = multer({ dest: "uploads/" });
 const sharp = require("sharp");
 const path = require("path");
 const fs = require("fs");
+const gm = require("gm");
 
-function nikExtract(word) {
-  const wordDict = { 'b': "6", 'e': "2" };
-  return [...word].map(letter => wordDict[letter] || letter).join('');
-}
+function parseKTPData(text) {
+  const ktpData = {};
 
-function wordToNumberConverter(word) {
-  const wordDict = { '|': "1" };
-  return [...word].map(letter => wordDict[letter] || letter).join('');
-}
+  // Regex patterns for each field
+  const patterns = {
+    provinsi: /PROVINSI\s+([A-Z\s]+)/,
+    kabupaten: /KABUPATEN\s+([A-Z\s]+)/,
+    ktpNumber: /\b\d{16}\b/,
+    name: /\b[A-Z\s]+\b/,
+    birthPlace: /\b[A-Z\s]+\b/,
+    birthDate: /\b\d{2}[- ]\d{2}[- ]\d{4}\b/,
+    gender: /\b(LAKI(?:-LAKI)?|PRIA|PEREMPUAN|WANITA)\b/,
+    bloodType: /GolDarah\s([A|B|AB|O])/,
+    address: /JL\s+([A-Z0-9\s]+)/,
+    rtrw: /\b(\d{3})\/(\d{3})\b/,
+    village: /\bCIBENTANG|CIBENTANG\b/, // Adjust as needed for known village names
+    district: /\bCISEENG\b/, // Adjust as needed for known district names
+    religion: /\bISLAM|KRISTEN|KATOLIK|HINDU|BUDDHA\b/,
+    maritalStatus: /\bBELUM KAWIN|KAWIN|CERAI\b/,
+    occupation: /\bWIRASWASTA|PEGAWAI\b/, // Add common occupations
+    nationality: /\bWNI|WNA\b/,
+    issueDate: /\b\d{2}-\d{2}-\d{4}\b/,
+  };
 
-function extract(extractedResult) {
-  const result = {};
-  try {
-    extractedResult.split("\n").forEach(word => {
-      if (word.includes("NIK")) {
-          const [, nik] = word.split(':');
-          result.nik = nikExtract(nik?.replace(/\s+/g, '') || '');
-      } else if (word.includes("Nama")) {
-          const [, nama] = word.split(':');
-          result.nama = nama?.replace('Nama ', '')?.trim() || '';
-      } else if (word.includes("Tempat")) {
-          const [, detail] = word.split(':') || ['', ''];
-          const birthDateMatch = detail?.match(/(\d{2}-\d{2}-\d{4})/);
-          result.tanggal_lahir = birthDateMatch ? birthDateMatch[0] : '';
-          result.tempat_lahir = detail?.replace(result.tanggal_lahir, '')?.trim() || '';
-      } else if (word.includes("Darah")) {
-          const genderMatch = word?.match(/(LAKI-LAKI|LAKI|LELAKI|PEREMPUAN)/);
-          result.jenis_kelamin = genderMatch ? genderMatch[0] : '';
-          const [, bloodType] = word.split(':') || ['', ''];
-          result.golongan_darah = bloodType && /O|A|B|AB/.test(bloodType) ? bloodType.match(/O|A|B|AB/)[0] : '-';
-      } else if (word.includes("Alamat")) {
-          result.alamat = wordToNumberConverter(word?.replace("Alamat ", "") || '');
-      } else if (word.includes("NO.")) {
-          result.alamat += ' ' + word;
-      } else if (word.includes("Kecamatan")) {
-          const [, kecamatan] = word.split(':') || ['', ''];
-          result.kecamatan = kecamatan?.trim() || '';
-      } else if (word.includes("Desa")) {
-          const words = word?.split(' ') || [];
-          const desa = words.filter(w => !/desa/i.test(w));
-          result.kelurahan_atau_desa = desa.join(' ')?.trim() || '';
-      } else if (word.includes("Kewarganegaraan")) {
-          const [, kewarganegaraan] = word.split(':') || ['', ''];
-          result.kewarganegaraan = kewarganegaraan?.trim() || '';
-      } else if (word.includes("Pekerjaan")) {
-          const words = word?.split(' ') || [];
-          const pekerjaan = words.filter(w => !w.includes('-'));
-          result.pekerjaan = pekerjaan.join(' ')?.replace('Pekerjaan', '')?.trim() || '';
-      } else if (word.includes("Agama")) {
-          result.agama = word?.replace("Agama", "")?.trim() || '';
-      } else if (word.includes("Perkawinan")) {
-          const [, statusPerkawinan] = word.split(':') || ['', ''];
-          result.status_perkawinan = statusPerkawinan?.trim() || '';
-      } else if (word.includes("RTRW")) {
-          const [rt, rw] = word?.replace("RTRW", '')?.split('/') || ['', ''];
-          result.rt = rt?.trim() || '';
-          result.rw = rw?.trim() || '';
-      }
-    });
-  } catch (error) {
-    console.error('Error extracting KTP data:', error);
+  // Extract fields using regex patterns
+  ktpData.provinsi = text.split("\n")[0]?.trim();
+  ktpData.kabupaten = text.split("\n")[1]?.trim();
+  ktpData.ktpNumber = (text.match(patterns.ktpNumber) || [])[0];
+  ktpData.name = text.split("\n")[3]?.trim();
+  const birthPlace = text.split("\n")[4]?.trim().match(patterns.birthPlace);
+  const birthDate = text.split("\n")[4]?.trim().match(patterns.birthDate);
+  ktpData.birthPlace = birthPlace ? birthPlace[0] : "";
+  ktpData.birthDate = birthDate ? birthDate[0].replace(/ /g, "-") : "";
+  ktpData.gender = (text.match(patterns.gender) || [])[0];
+  ktpData.bloodType = (text.match(patterns.bloodType) || [])[1];
+  ktpData.address = text.split("\n")[6]?.trim();
+  const rtrwMatch = text.match(patterns.rtrw);
+  if (rtrwMatch) {
+    ktpData.rt = rtrwMatch[1];
+    ktpData.rw = rtrwMatch[2];
   }
+  ktpData.village = (text.match(patterns.village) || [])[0];
+  ktpData.district = (text.match(patterns.district) || [])[0];
+  ktpData.religion = (text.match(patterns.religion) || [])[0];
+  ktpData.maritalStatus = (text.match(patterns.maritalStatus) || [])[0];
+  ktpData.occupation = (text.match(patterns.occupation) || [])[0];
+  ktpData.nationality = (text.match(patterns.nationality) || [])[0];
+  ktpData.issueDate = (text.match(patterns.issueDate) || [])[0];
 
-  return result;
+  return ktpData;
 }
 
+router.post(
+  "/",
+  upload.single("image"),
+  async function (request, response, next) {
+    try {
+      const worker = await createWorker();
+      await worker.load();
+      await worker.loadLanguage("ind");
+      await worker.initialize("ind");
+      await worker.setParameters({
+        tessedit_char_whitelist: "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-, ",
+        preserve_interword_spaces: "1",
+        user_defined_dpi: "600",
+      });
 
-router.post("/", upload.single("image"), async function (request, response, next) {
-  try {
-      const worker = await createWorker("ind");
       const imagePath = request.file.path;
       const tempPath = "uploads/" + path.basename(imagePath) + ".jpeg";
-
-      console.log(imagePath);
-      console.log(tempPath);
 
       // Ensure uploads directory exists
       if (!fs.existsSync("uploads")) {
         fs.mkdirSync("uploads");
       }
 
-      await sharp(imagePath)
-        .grayscale(true)
-        .sharpen()
-        .toFormat("jpeg")
-        .toFile(tempPath)
-        .then(() => console.log("success"))
-        .catch(err => console.log(err));
+      await gm(imagePath)
+        .density(600, 600) // Increase DPI
+        .resizeExact(1200, 755) // Resize with ratio
+        .quality(100)
+        .crop(569, 647, 266, 5) // Crop to trim only text part
+        .autoOrient()
+        .quality(100)
+        .colorspace("GRAY") // Make picture grayscale
+        .threshold("40", "Threshold-White") // Make picture black&white
+        .quality(100)
+        .write(tempPath, async function (err) {
+          if (err) console.log(err);
 
-      const {
-        data: { text: rawTextExtracted },
-      } = await worker.recognize(tempPath);
+          const {
+            data: { text: rawTextExtracted },
+          } = await worker.recognize(tempPath);
 
-      console.log(rawTextExtracted);
+          console.log(rawTextExtracted);
 
-      const cleanResOCR = extract(rawTextExtracted);
+          // Cleanup temporary files
+          fs.unlinkSync(imagePath);
+          fs.unlinkSync(tempPath);
 
-      console.log(cleanResOCR);
+          await worker.terminate();
 
-      // Cleanup temporary files
-      fs.unlinkSync(imagePath);
-      fs.unlinkSync(tempPath);
-
-      response.send(cleanResOCR);
+          response.send(parseKTPData(rawTextExtracted));
+        });
     } catch (error) {
       next(error);
     }
